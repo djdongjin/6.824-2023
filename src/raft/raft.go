@@ -19,6 +19,7 @@ package raft
 
 import (
 	//	"bytes"
+
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -187,6 +188,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && rf.logBehindThan(args) {
 		rf.votedFor = args.CandidateId
 		reply.VoteGranted = true
+		// Reset election timer: grant vote to candidate.
 		rf.receiveHB = true
 	}
 
@@ -221,7 +223,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	DPrintf("[sendRequestVote] %d -> %d, request: %+v", args.CandidateId, server, args)
+	// DPrintf("[sendRequestVote] %d -> %d, request: %+v", args.CandidateId, server, args)
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
 }
@@ -245,7 +247,35 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	// Your code here (2B).
 
-	return index, term, isLeader
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	term = rf.currentTerm
+	index = len(rf.logs)
+	isLeader = rf.role == LEADER
+	if !isLeader {
+		return -1, term, false
+	}
+
+	rf.logs = append(rf.logs, LogEntry{
+		Term:    term,
+		Command: command,
+		Index:   index,
+	})
+
+	DPrintf("[Start] %d, term: %d, index: %d, command: %+v", rf.me, rf.currentTerm, index, command)
+	for i := range rf.peers {
+		if i == rf.me {
+			continue
+		}
+
+		prevLogIndex := rf.nextIndex[i] - 1
+		prevLogTerm := rf.logs[prevLogIndex].Term
+		entries := rf.logs[prevLogIndex+1:]
+		go rf.sendAppendEntriesToOne(i, rf.me, term, rf.commitIndex, prevLogTerm, prevLogIndex, entries, true)
+	}
+
+	return index, term, true
 }
 
 // the tester doesn't halt goroutines created by Raft after each test,
@@ -368,7 +398,7 @@ func (rf *Raft) startLeaderElection() {
 					rf.becomeFollower(reply.Term)
 				}
 				// don't need `broadcast`, since only the main goroutine is waiting.
-				cond.Signal()
+				cond.Broadcast()
 			}
 		}()
 	}
@@ -421,51 +451,95 @@ func (rf *Raft) tickerHB() {
 			rf.mu.Unlock()
 			break
 		}
-		rf.mu.Unlock()
 
-		go rf.startHeartbeat()
+		for i := range rf.peers {
+			if i == rf.me {
+				continue
+			}
+
+			prevLogIndex := rf.nextIndex[i] - 1
+			prevLogTerm := rf.logs[prevLogIndex].Term
+			entries := rf.logs[prevLogIndex+1:]
+			go rf.sendAppendEntriesToOne(i, rf.me, rf.currentTerm, rf.commitIndex, prevLogTerm, prevLogIndex, entries, false)
+		}
+
+		rf.mu.Unlock()
 	}
 }
 
-// startHeartbeat sends AppendEntries RPCs to all other nodes to broadcast
-// and maintain its leader status.
-func (rf *Raft) startHeartbeat() {
-	rf.mu.Lock()
-	lastLogTerm, lastLogIndex := rf.lastLogTermIndex()
+func (rf *Raft) sendAppendEntriesToOne(i, leaderId, term, leaderCommitIndex, prevLogTerm, prevLogIndex int, entries []LogEntry, retry bool) {
 	request := AppendEntriesArgs{
-		Type:         TypeHeartbeat,
-		Term:         rf.currentTerm,
-		LeaderId:     rf.me,
-		PrevLogTerm:  lastLogTerm,
-		PrevLogIndex: lastLogIndex,
+		Term:              term,
+		LeaderId:          leaderId,
+		LeaderCommitIndex: leaderCommitIndex,
+		PrevLogTerm:       prevLogTerm,
+		PrevLogIndex:      prevLogIndex,
+		Entries:           entries,
 	}
-	rf.mu.Unlock()
 
-	DPrintf("[startHeartbeat.start] %d, term: %d\n", rf.me, request.Term)
-
-	for i := range rf.peers {
-		if i == rf.me {
-			continue
+	for !rf.killed() {
+		reply := AppendEntriesReply{}
+		ok := rf.sendAppendEntries(i, &request, &reply)
+		if !ok {
+			return
 		}
 
-		i := i
-		reply := AppendEntriesReply{}
+		rf.mu.Lock()
+		if !rf.checkTermAndRole(request.Term, LEADER) {
+			// Term + role has been changed, return without processing reply.
+			rf.mu.Unlock()
+			return
+		}
 
-		go func() {
-			if rf.sendAppendEntries(i, &request, &reply) {
-				rf.mu.Lock()
-				defer rf.mu.Unlock()
-				if !rf.checkTermAndRole(request.Term, LEADER) {
-					return
-				}
-				if reply.Term > rf.currentTerm {
-					rf.becomeFollower(reply.Term)
+		if reply.Term > rf.currentTerm {
+			// Find new term, convert to follower and return.
+			rf.becomeFollower(reply.Term)
+			rf.mu.Unlock()
+			return
+		}
+
+		if reply.Success {
+			// Update nextIndex and matchIndex for follower.
+			matchIndex := request.PrevLogIndex + len(request.Entries)
+			if rf.matchIndex[i] < matchIndex {
+				// trick: if `rf.matchIndex[i]` is already larger, that
+				// means it has been updated by newer AE RPC replies.
+				// The current reply, although success (i.e. contains a subset of logs),
+				// contains outdated information about matchIndex and nextIndex. In
+				// that case, we don't need to update it, which makes it smaller and
+				// makes latter AE RPCs contains more entries.
+				rf.matchIndex[i] = matchIndex
+				rf.nextIndex[i] = matchIndex + 1
+			}
+
+			if rf.commitIndex < matchIndex && rf.currentTerm == rf.logs[matchIndex].Term {
+				cnt := 1 // leader itself
+				for j := range rf.peers {
+					if j != rf.me && rf.matchIndex[j] >= matchIndex {
+						cnt++
+					}
+					if cnt > len(rf.peers)/2 {
+						rf.commitIndex = matchIndex
+						go rf.applyCommit()
+						break
+					}
 				}
 			}
-		}()
-	}
 
-	DPrintf("[startHeartbeat.end] %d, term: %d\n", rf.me, request.Term)
+			rf.mu.Unlock()
+			return
+		}
+
+		// Retry with smaller `nextIndex`.
+		rf.nextIndex[i]--
+		request.PrevLogIndex = rf.nextIndex[i] - 1
+		request.PrevLogTerm = rf.logs[request.PrevLogIndex].Term
+		request.Entries = rf.logs[rf.nextIndex[i]:]
+		rf.mu.Unlock()
+		if !retry {
+			return
+		}
+	}
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -481,24 +555,51 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Term = rf.currentTerm
 	reply.Success = false
 
-	// Reply false directly if term < currentTerm.
+	// 1. Reply false directly if term < currentTerm.
 	if args.Term < rf.currentTerm {
 		return
 	}
 
+	// Reset election timer: receive AE RPC from current leader that the node knows.
 	rf.receiveHB = true
 
 	if args.Term > rf.currentTerm {
 		rf.becomeFollower(args.Term)
 	}
 
-	if args.Type == TypeHeartbeat {
-		reply.Success = true
+	// 2. Reply false if log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm.
+	if len(rf.logs) <= args.PrevLogIndex || rf.logs[args.PrevLogIndex].Term != args.PrevLogTerm {
 		return
 	}
 
-	DPrintf("[AppendEntries] %d -> %d, request: %+v, reply: %+v", args.LeaderId, rf.me, args, reply)
-	// TODO(djdongjin): handle real AppendEntries RPCs.
+	// 3. & 4.
+	reply.Success = true
+	for i, ent := range args.Entries {
+		// 3. If an existing entry conflicts with a new one (same index but different terms),
+		// delete the existing entry and all that follow it.
+		if ent.Index < len(rf.logs) && rf.logs[ent.Index].Term != ent.Term {
+			rf.logs = rf.logs[:ent.Index]
+		}
+		// 4. Append any new entries NOT ALREADY in the log.
+		if ent.Index >= len(rf.logs) {
+			rf.logs = append(rf.logs, args.Entries[i:]...)
+			break
+		}
+		// 3. ensures `rf.logs` doesn't have conflict entries, and 4. ensures `rf.logs` has all new entries.
+		// So if we're here, we can go to the next loop (i.e., the current entry already exists in `rf.logs`).
+	}
+
+	// 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry).
+	DPrintf("leader commit index: %d, current commit index: %d, log len:%d", args.LeaderCommitIndex, rf.commitIndex, len(rf.logs))
+	if args.LeaderCommitIndex > rf.commitIndex {
+		rf.commitIndex = rf.logs[len(rf.logs)-1].Index
+		if rf.commitIndex > args.LeaderCommitIndex {
+			rf.commitIndex = args.LeaderCommitIndex
+		}
+		go rf.applyCommit()
+	}
+
+	DPrintf("[AppendEntries] %d -> %d, request: %+v, reply: %+v, log: %v", args.LeaderId, rf.me, args, reply, rf.logs)
 }
 
 func (rf *Raft) lastLogTermIndex() (int, int) {
@@ -547,6 +648,20 @@ func (rf *Raft) becomeLeader(term int) {
 
 func (rf *Raft) checkTermAndRole(term int, role string) bool {
 	return rf.currentTerm == term && rf.role == role
+}
+
+func (rf *Raft) applyCommit() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	DPrintf("[applyCommit] %d, term: %d, apply log [%d, %d]", rf.me, rf.currentTerm, rf.lastApplied+1, rf.commitIndex)
+	for rf.lastApplied < rf.commitIndex {
+		rf.lastApplied++
+		rf.applyCh <- ApplyMsg{
+			CommandValid: true,
+			Command:      rf.logs[rf.lastApplied].Command,
+			CommandIndex: rf.logs[rf.lastApplied].Index,
+		}
+	}
 }
 
 // the service or tester wants to create a Raft server. the ports
