@@ -9,11 +9,11 @@ $ ./go-test-many.sh 500 32 2C
 ```
 
 - [x] [Lab 1: MapReduce](https://pdos.csail.mit.edu/6.824/labs/lab-mr.html)
-- [x] [Lab 2: Raft](https://pdos.csail.mit.edu/6.824/labs/lab-raft.html)
+- [x] [Lab 2: Raft](https://pdos.csail.mit.edu/6.824/labs/lab-raft.html) [pass 99/100 test runs (`./go-test-many.sh 100 20 2`)]
   - [x] Lab 2A: LeaderElection and Heartbeat [pass 1000/1000]
   - [x] Lab 2B: AppendEntries for leaders and followers [pass 1000/1000]
   - [x] Lab 2C: Persist Raft data [pass 497~500/500, rare failure means an optimization might necessary]
-  - [ ] Lab 2D: log compaction
+  - [x] Lab 2D: log compaction
 - [ ] [Lab 3: Key-Value storage based on Raft](https://pdos.csail.mit.edu/6.824/labs/lab-kvraft.html)
   - [ ] Lab 3A: KV storage without snapshots
   - [ ] Lab 3B: KV storage with snapshots
