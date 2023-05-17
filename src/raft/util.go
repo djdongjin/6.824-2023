@@ -11,3 +11,17 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	}
 	return
 }
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
