@@ -1,5 +1,7 @@
 package raft
 
+import "fmt"
+
 const (
 	FOLLOWER  = "FOLLOWER"
 	CANDIDATE = "CANDIDATE"
@@ -36,6 +38,10 @@ type ApplyMsg struct {
 	SnapshotIndex int
 }
 
+func (msg ApplyMsg) String() string {
+	return fmt.Sprintf("ApplyMsg{CommandValid: %v, Command: %v, CommandIndex: %v, SnapshotValid: %v, SnapshotTerm: %v, SnapshotIndex: %v}", msg.CommandValid, msg.Command, msg.CommandIndex, msg.SnapshotValid, msg.SnapshotTerm, msg.SnapshotIndex)
+}
+
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 type RequestVoteArgs struct {
@@ -51,12 +57,20 @@ type RequestVoteArgs struct {
 	LastLogIndex int
 }
 
+func (args RequestVoteArgs) String() string {
+	return fmt.Sprintf("RequestVoteArgs{Term: %v, CandidateId: %v, LastLogTerm: %v, LastLogIndex: %v}", args.Term, args.CandidateId, args.LastLogTerm, args.LastLogIndex)
+}
+
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
 	// Your data here (2A).
 	Term        int
 	VoteGranted bool
+}
+
+func (reply RequestVoteReply) String() string {
+	return fmt.Sprintf("RequestVoteReply{Term: %v, VoteGranted: %t}", reply.Term, reply.VoteGranted)
 }
 
 // AppendEntriesArgs is a RPC request struct for AppendEntries RPC.
@@ -71,6 +85,10 @@ type AppendEntriesArgs struct {
 	LeaderCommitIndex int
 }
 
+func (args AppendEntriesArgs) String() string {
+	return fmt.Sprintf("AppendEntriesArgs{Type: %v, Term: %v, LeaderId: %v, PrevLogTerm: %v, PrevLogIndex: %v, #(Entries): %v, LeaderCommitIndex: %v}", args.Type, args.Term, args.LeaderId, args.PrevLogTerm, args.PrevLogIndex, len(args.Entries), args.LeaderCommitIndex)
+}
+
 // AppendEntriesReply is a RPC reply from AppendEntries RPC.
 type AppendEntriesReply struct {
 	Term    int
@@ -80,6 +98,10 @@ type AppendEntriesReply struct {
 	XTerm  int // term in the conflicting entry (if any)
 	XIndex int // index of first entry with that term (if any)
 	XLen   int // log length
+}
+
+func (reply AppendEntriesReply) String() string {
+	return fmt.Sprintf("AppendEntriesReply{Term: %v, Success: %t, XTerm: %v, XIndex: %v, XLen: %v}", reply.Term, reply.Success, reply.XTerm, reply.XIndex, reply.XLen)
 }
 
 // LogEntry is a log entry in the log.
@@ -98,7 +120,15 @@ type InstallSnapshotArgs struct {
 	Data              []byte
 }
 
+func (args InstallSnapshotArgs) String() string {
+	return fmt.Sprintf("InstallSnapshotArgs{Term: %v, LeaderId: %v, LastIncludedIndex: %v, LastIncludedTerm: %v}", args.Term, args.LeaderId, args.LastIncludedIndex, args.LastIncludedTerm)
+}
+
 // InstallSnapshotReply is a RPC reply from InstallSnapshot RPC.
 type InstallSnapshotReply struct {
 	Term int // currentTerm of the receiving server, for leader to update itself if necessary
+}
+
+func (reply InstallSnapshotReply) String() string {
+	return fmt.Sprintf("InstallSnapshotReply{Term: %v}", reply.Term)
 }

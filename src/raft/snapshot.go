@@ -59,11 +59,6 @@ func (rf *Raft) sendInstallSnapshotToOne(i int) {
 		rf.mu.Unlock()
 
 		ok := rf.sendInstallSnapshot(i, &request, &reply)
-		if !ok {
-			time.Sleep(10 * time.Millisecond)
-			continue
-		}
-
 		rf.mu.Lock()
 		if !rf.checkTermAndRole(request.Term, LEADER) {
 			rf.mu.Unlock()
@@ -73,6 +68,11 @@ func (rf *Raft) sendInstallSnapshotToOne(i int) {
 			rf.becomeFollower(reply.Term)
 			rf.mu.Unlock()
 			return
+		}
+		if !ok {
+			rf.mu.Unlock()
+			time.Sleep(10 * time.Millisecond)
+			continue
 		}
 
 		rf.matchIndex[i] = maxInt(rf.matchIndex[i], request.LastIncludedIndex)
