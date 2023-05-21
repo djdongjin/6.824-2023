@@ -24,12 +24,11 @@ import (
 func (rf *Raft) ticker() {
 	rf.mu.Lock()
 	startTerm, startStatus := rf.currentTerm, rf.role
+	DPrintf("[ticker.start] %d, term: %d, role: %s\n", rf.me, startTerm, startStatus)
 	rf.mu.Unlock()
 	if startStatus == LEADER {
 		return
 	}
-
-	DPrintf("[ticker.start] %d, term: %d, role: %s\n", rf.me, startTerm, startStatus)
 
 	for rf.killed() == false {
 		// Your code here (2A)
@@ -47,8 +46,8 @@ func (rf *Raft) ticker() {
 		// 3. Start leader election if not yet a leader and not receive HB.
 		rf.mu.Lock()
 		if rf.role == LEADER {
-			rf.mu.Unlock()
 			DPrintf("[ticker.end] %d, term: %d -> %d, role: %s -> %s\n", rf.me, startTerm, rf.currentTerm, startStatus, rf.role)
+			rf.mu.Unlock()
 			break
 		}
 		if !rf.receiveHB {
@@ -80,41 +79,45 @@ func (rf *Raft) startLeaderElection() {
 		if i == rf.me {
 			continue
 		}
-
 		i := i
-		request := RequestVoteArgs{
-			Term:         term,
-			CandidateId:  rf.me,
-			LastLogTerm:  lastLogTerm,
-			LastLogIndex: lastLogIndex,
-		}
 
 		go func() {
+			request := RequestVoteArgs{
+				Term:         term,
+				CandidateId:  rf.me,
+				LastLogTerm:  lastLogTerm,
+				LastLogIndex: lastLogIndex,
+			}
 			var reply RequestVoteReply
-			ok := false
 			for !rf.killed() {
 				reply = RequestVoteReply{}
-				if ok = rf.sendRequestVote(i, &request, &reply); ok {
-					break
-				}
-				time.Sleep(10 * time.Millisecond)
-			}
-			rf.mu.Lock()
-			defer rf.mu.Unlock()
-			rf.voteReceived++
-			if ok {
+				ok := rf.sendRequestVote(i, &request, &reply)
+
+				rf.mu.Lock()
 				if !rf.checkTermAndRole(request.Term, CANDIDATE) {
-					return
-				}
-				if reply.VoteGranted {
-					rf.voteGranted++
+					rf.mu.Unlock()
+					break
 				}
 				if reply.Term > rf.currentTerm {
 					rf.becomeFollower(reply.Term)
+					rf.mu.Unlock()
+					break
 				}
-				// don't need `broadcast`, since only the main goroutine is waiting.
-				cond.Broadcast()
+				if ok {
+					rf.voteReceived++
+					if reply.VoteGranted {
+						rf.voteGranted++
+					}
+					rf.mu.Unlock()
+					break
+				}
+
+				rf.mu.Unlock()
+				time.Sleep(10 * time.Millisecond)
 			}
+
+			// don't need `broadcast`, since only the main goroutine is waiting.
+			cond.Broadcast()
 		}()
 	}
 
@@ -126,12 +129,11 @@ func (rf *Raft) startLeaderElection() {
 	for rf.checkTermAndRole(term, CANDIDATE) && rf.voteGranted <= len(rf.peers)/2 && rf.voteReceived < len(rf.peers) {
 		cond.Wait()
 	}
+	DPrintf("[startLeaderElection.end] %d, term: %d -> %d, vote granted: %d, vote received: %d\n", rf.me, term, rf.currentTerm, rf.voteGranted, rf.voteReceived)
 	defer rf.mu.Unlock()
 
 	// If after sending RequestVote RPCs, the Raft node is no longer a candidate,
 	// or not in the same term, return directly since this election has expired.
-
-	DPrintf("[startLeaderElection.end] %d, term: %d -> %d, vote granted: %d, vote received: %d\n", rf.me, term, rf.currentTerm, rf.voteGranted, rf.voteReceived)
 
 	switch {
 	case !rf.checkTermAndRole(term, CANDIDATE):
@@ -175,18 +177,18 @@ func (rf *Raft) startLeaderElection() {
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	DPrintf("[sendRequestVote.start] %d -> %d, request: %+v", args.CandidateId, server, args)
+	DPrintf("[sendRequestVote.start] %d -> %d, request: %s", args.CandidateId, server, args)
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-	DPrintf("[sendRequestVote.end] %d -> %d, request: %+v, reply: %+v, result: %t", args.CandidateId, server, args, reply, ok)
+	DPrintf("[sendRequestVote.end] %d -> %d, request: %s, reply: %s, result: %t", args.CandidateId, server, args, reply, ok)
 	return ok
 }
 
 // RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	DPrintf("[RequestVote.start] %d -> %d (votedFor: %d), request: %+v, reply: %+v", args.CandidateId, rf.me, rf.votedFor, args, reply)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	DPrintf("[RequestVote.start] %d -> %d (votedFor: %d), request: %s", args.CandidateId, rf.me, rf.votedFor, args)
 
 	reply.Term = rf.currentTerm
 	reply.VoteGranted = false
@@ -207,5 +209,5 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.receiveHB = true
 	}
 
-	DPrintf("[RequestVote.end] %d -> %d (votedFor: %d), request: %+v, reply: %+v", args.CandidateId, rf.me, rf.votedFor, args, reply)
+	DPrintf("[RequestVote.end] %d -> %d (votedFor: %d), request: %s, reply: %s", args.CandidateId, rf.me, rf.votedFor, args, reply)
 }

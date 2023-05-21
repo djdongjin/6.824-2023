@@ -261,12 +261,7 @@ func (rf *Raft) tickerHB() {
 
 func (rf *Raft) sendAppendEntriesToOne(i int, retry bool) {
 	rf.mu.Lock()
-	request := AppendEntriesArgs{
-		Term:              rf.currentTerm,
-		LeaderId:          rf.me,
-		LeaderCommitIndex: rf.commitIndex,
-		// Remaining fields will be added/updated in the for loop.
-	}
+	startTerm, startCommitIndex := rf.currentTerm, rf.commitIndex
 	rf.mu.Unlock()
 
 	for !rf.killed() {
@@ -278,22 +273,24 @@ func (rf *Raft) sendAppendEntriesToOne(i int, retry bool) {
 			rf.sendInstallSnapshotToOne(i)
 			rf.mu.Lock()
 		}
-		if !rf.checkTermAndRole(request.Term, LEADER) {
+		if !rf.checkTermAndRole(startTerm, LEADER) {
 			rf.mu.Unlock()
 			return
 		}
 
-		request.PrevLogTerm, request.PrevLogIndex = rf.prevLogTermIndex(rf.nextIndex[i])
-		request.Entries = rf.logs[rf.logIdx(rf.nextIndex[i]):]
+		prevLogTerm, prevLogIndex := rf.prevLogTermIndex(rf.nextIndex[i])
+		request := AppendEntriesArgs{
+			Term:              startTerm,
+			LeaderId:          rf.me,
+			LeaderCommitIndex: startCommitIndex,
+			PrevLogTerm:       prevLogTerm,
+			PrevLogIndex:      prevLogIndex,
+			Entries:           rf.logs[rf.logIdx(rf.nextIndex[i]):],
+		}
 		reply := AppendEntriesReply{}
 		rf.mu.Unlock()
 
 		ok := rf.sendAppendEntries(i, &request, &reply)
-		if !ok {
-			time.Sleep(10 * time.Millisecond)
-			continue
-		}
-
 		rf.mu.Lock()
 		if !rf.checkTermAndRole(request.Term, LEADER) {
 			rf.mu.Unlock()
@@ -303,6 +300,11 @@ func (rf *Raft) sendAppendEntriesToOne(i int, retry bool) {
 			rf.becomeFollower(reply.Term)
 			rf.mu.Unlock()
 			return
+		}
+		if !ok {
+			rf.mu.Unlock()
+			time.Sleep(10 * time.Millisecond)
+			continue
 		}
 
 		if reply.Success {
@@ -373,7 +375,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	DPrintf("[AppendEntries.start] %d -> %d, request: %+v", args.LeaderId, rf.me, args)
+	DPrintf("[AppendEntries.start] %d -> %d, request: %s", args.LeaderId, rf.me, args)
 
 	reply.Term = rf.currentTerm
 	reply.Success = false
@@ -402,7 +404,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			for reply.XIndex = args.PrevLogIndex; reply.XIndex-1 > rf.lastIncludedIndex && rf.logs[rf.logIdx(reply.XIndex-1)].Term == reply.XTerm; reply.XIndex-- {
 			}
 		}
-		DPrintf("[AppendEntries.end] %d -> %d, request: %+v, reply: %+v, log: %v", args.LeaderId, rf.me, args, reply, rf.logs)
+		DPrintf("[AppendEntries.end] %d -> %d, request: %s, reply: %s", args.LeaderId, rf.me, args, reply)
 		return
 	}
 
@@ -439,7 +441,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 	}
 
-	DPrintf("[AppendEntries.end] %d -> %d, request: %+v, reply: %+v, log: %v", args.LeaderId, rf.me, args, reply, rf.logs)
+	DPrintf("[AppendEntries.end] %d -> %d, request: %s, reply: %s", args.LeaderId, rf.me, args, reply)
 }
 
 // logIdx returns the canonical index of the log entry within `rf.logs` slice.
