@@ -14,7 +14,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	DPrintf("[Snapshot.start] %d, index: %d, lastIncludedIndex: %d", rf.me, index, rf.lastIncludedIndex)
+	DPrintf("[Snapshot.start] %d, index: %d, lastIncludedIndex: %d, log length: %d", rf.me, index, rf.lastIncludedIndex, len(rf.logs))
 	// If the snapshot is older than the current snapshot, ignore it.
 	if index <= rf.lastIncludedIndex {
 		return
@@ -30,7 +30,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.lastIncludedIndex = rf.logs[idx].Index
 	rf.logs = rf.logs[idx+1:]
 	rf.persist()
-	DPrintf("[Snapshot.end] %d, index: %d, lastIncludedIndex: %d", rf.me, index, rf.lastIncludedIndex)
+	DPrintf("[Snapshot.end] %d, index: %d, lastIncludedIndex: %d, log length: %d", rf.me, index, rf.lastIncludedIndex, len(rf.logs))
 }
 
 func (rf *Raft) sendInstallSnapshotToOne(i int) {
