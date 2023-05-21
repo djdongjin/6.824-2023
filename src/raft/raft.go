@@ -270,8 +270,11 @@ func (rf *Raft) sendAppendEntriesToOne(i int, retry bool) {
 			rf.mu.Unlock()
 			// Send snapshot in the same goroutine, since there is nothing to
 			// do for it before the snapshot is processed by the receiver.
+			// Upon finish, continue to the next iteration so we can re-check the
+			// condition, since there might be newer snapshot made which further
+			// increases `rf.lastIncludedIndex`
 			rf.sendInstallSnapshotToOne(i)
-			rf.mu.Lock()
+			continue
 		}
 		if !rf.checkTermAndRole(startTerm, LEADER) {
 			rf.mu.Unlock()

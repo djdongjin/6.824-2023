@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"bytes"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -81,6 +82,12 @@ type KVServer struct {
 	index2uid map[int]int64 // log entry index -> UID
 
 	killedCh chan struct{}
+
+	// for snapshotting
+	// `lastIncludedIndex` is the index of the last log entry included in the snapshot.
+	// `persister` is only used to calculate raft state size.
+	lastIncludedIndex int
+	persister         *raft.Persister
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -100,7 +107,6 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 	reply.Err = kv.sendOpToRaft(OpFromPutAppendArgs(args))
-
 }
 
 func (kv *KVServer) sendOpToRaft(op Op) Err {
@@ -135,6 +141,15 @@ func (kv *KVServer) waitOpToFinish(index int, uid, rid int64) Err {
 		i++
 
 		kv.mu.Lock()
+		switch {
+		case kv.uid2rid[uid] == rid:
+			kv.mu.Unlock()
+			return OK
+		case kv.uid2rid[uid] > rid:
+			kv.mu.Unlock()
+			return ErrWrongLeader
+		}
+
 		if committedUid, ok := kv.index2uid[index]; ok {
 			var err Err
 			if committedUid == uid && kv.uid2rid[uid] == rid {
@@ -145,6 +160,7 @@ func (kv *KVServer) waitOpToFinish(index int, uid, rid int64) Err {
 			kv.mu.Unlock()
 			return err
 		}
+
 		kv.mu.Unlock()
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -214,14 +230,6 @@ func (kv *KVServer) applyCommand(msg *raft.ApplyMsg) {
 		return
 	}
 
-	// for debug/log: when applying command at `index`, `index-1` should already be applied, and `index+1` should not.
-	if _, ok := kv.index2uid[index-1]; !ok && index > 1 {
-		DPrintf("[PANIC][applyCommand] %d, miss unexpected index: %d, applying: %d", kv.me, index-1, index)
-	}
-	if _, ok := kv.index2uid[index+1]; ok {
-		DPrintf("[PANIC][applyCommand] %d, found unexpected index: %d, applying: %d", kv.me, index+1, index)
-	}
-
 	DPrintf("[applyCommand] %d, applying index: %d, UID: %d, RID: %d", kv.me, index, op.UID, op.RID)
 
 	// update kv server data
@@ -243,10 +251,58 @@ func (kv *KVServer) applyCommand(msg *raft.ApplyMsg) {
 		}
 		kv.data[op.Key] += op.Value
 	}
+
+	if kv.maxraftstate > 0 && kv.persister.RaftStateSize() >= kv.maxraftstate {
+		kv.lastIncludedIndex = index
+		kv.rf.Snapshot(index, kv.makeSnapshot())
+	}
 }
 
 func (kv *KVServer) applySnapshot(msg *raft.ApplyMsg) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	DPrintf("[applySnapshot.Start] %d, applying snapshot: %d", kv.me, msg.SnapshotIndex)
 
+	if kv.lastIncludedIndex >= msg.SnapshotIndex {
+		return
+	}
+
+	kv.readSnapshot(msg.Snapshot)
+
+	DPrintf("[applySnapshot.End] %d, applying snapshot: %d", kv.me, msg.SnapshotIndex)
+}
+
+func (kv *KVServer) readSnapshot(snapshot []byte) {
+	if snapshot == nil || len(snapshot) < 1 {
+		return
+	}
+
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+	var data map[string]string
+	var uid2rid map[int64]int64
+	var uid2val map[int64]string
+	var lastIncludedIndex int
+	if d.Decode(&data) != nil || d.Decode(&uid2rid) != nil || d.Decode(&uid2val) != nil || d.Decode(&lastIncludedIndex) != nil {
+		panic("failed to decode snapshot")
+	} else {
+		kv.data = data
+		kv.uid2rid = uid2rid
+		kv.uid2val = uid2val
+		kv.lastIncludedIndex = lastIncludedIndex
+	}
+}
+
+func (kv *KVServer) makeSnapshot() []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.data)
+	e.Encode(kv.uid2rid)
+	e.Encode(kv.uid2val)
+	e.Encode(kv.lastIncludedIndex)
+	data := w.Bytes()
+	DPrintf("[makeSnapshot] %d, making snapshot: %d, snapshot size: %d", kv.me, kv.lastIncludedIndex, len(data))
+	return data
 }
 
 // servers[] contains the ports of the set of
@@ -269,6 +325,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv := new(KVServer)
 	kv.me = me
 	kv.maxraftstate = maxraftstate
+	kv.persister = persister
 
 	// You may need initialization code here.
 
@@ -282,6 +339,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.index2uid = make(map[int]int64)
 
 	kv.killedCh = make(chan struct{}, 1)
+
+	kv.readSnapshot(kv.persister.ReadSnapshot())
 
 	go kv.applier()
 
