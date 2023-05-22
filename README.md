@@ -18,7 +18,7 @@ $ ./go-test-many.sh 500 32 2C
   - [x] Lab 3A: KV storage without snapshots [pass 100/100 test runs (`./go-test-many.sh 100 20 3A`)]
   - [x] Lab 3B: KV storage with snapshots [pass 100/100 test runs (`./go-test-many.sh 100 20 3B`)]
 - [ ] [Lab 4: Sharded Key-Value storage](https://pdos.csail.mit.edu/6.824/labs/lab-shard.html)
-  - [ ] Lab 4A: The Shard controller
+  - [x] Lab 4A: The Shard controller [pass 100/100 test runs (`./go-test-many.sh 100 20`)]
   - [ ] Lab 4B: Sharded Key/Value Server
 
 ## Lab 3A Notes

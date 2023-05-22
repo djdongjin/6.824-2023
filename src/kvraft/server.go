@@ -100,7 +100,6 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		if reply.Value == "" {
 			reply.Err = ErrNoKey
 		}
-
 	}
 }
 
