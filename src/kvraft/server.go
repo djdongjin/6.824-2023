@@ -21,8 +21,6 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-type Status string
-
 // Op is the `Command` struct in Raft that `KVServer` sends to Raft for consensus,
 // and Raft sends back for commit/apply after consensus is reached.
 type Op struct {
@@ -331,7 +329,6 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
-	// You may need initialization code here.
 	kv.data = make(map[string]string)
 	kv.uid2rid = make(map[int64]int64)
 	kv.uid2val = make(map[int64]string)
