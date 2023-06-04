@@ -15,9 +15,10 @@ const (
 	ErrWrongGroup  = "ErrWrongGroup"
 	ErrWrongLeader = "ErrWrongLeader"
 
-	OpPut    = "Put"
-	OpAppend = "Append"
-	OpGet    = "Get"
+	OpPut      = "Put"
+	OpAppend   = "Append"
+	OpGet      = "Get"
+	OpPutShard = "PutShard"
 )
 
 type Err string
@@ -53,4 +54,17 @@ type GetArgs struct {
 type GetReply struct {
 	Err   Err
 	Value string
+}
+
+type MigrateShardArgs struct {
+	ConfigNum int
+	Shard     int
+}
+
+type MigrateShardReply struct {
+	Err Err
+
+	Data    map[string]string
+	UID2RID map[int64]int64
+	UID2Val map[int64]string
 }

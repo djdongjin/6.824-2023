@@ -108,8 +108,6 @@ func (ck *Clerk) Get(key string) string {
 		ck.config = ck.sm.Query(-1)
 		args.ConfigNum = ck.config.Num
 	}
-
-	return ""
 }
 
 // shared by Put and Append.
