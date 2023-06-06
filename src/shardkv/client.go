@@ -8,11 +8,15 @@ package shardkv
 // talks to the group that holds the key's shard.
 //
 
-import "6.5840/labrpc"
-import "crypto/rand"
-import "math/big"
-import "6.5840/shardctrler"
-import "time"
+import (
+	"crypto/rand"
+	"math/big"
+	"sync"
+	"time"
+
+	"6.5840/labrpc"
+	"6.5840/shardctrler"
+)
 
 // which shard is a key in?
 // please use this function,
@@ -38,6 +42,9 @@ type Clerk struct {
 	config   shardctrler.Config
 	make_end func(string) *labrpc.ClientEnd
 	// You will have to modify this struct.
+	mu  sync.Mutex
+	uid int64
+	rid int64
 }
 
 // the tester calls MakeClerk.
@@ -52,7 +59,15 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 	ck.sm = shardctrler.MakeClerk(ctrlers)
 	ck.make_end = make_end
 	// You'll have to add code here.
+	ck.uid = nrand()
+	ck.rid = 1
 	return ck
+}
+
+func (ck *Clerk) requestId() int64 {
+	rid := ck.rid
+	ck.rid++
+	return rid
 }
 
 // fetch the current value for a key.
@@ -62,6 +77,12 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 func (ck *Clerk) Get(key string) string {
 	args := GetArgs{}
 	args.Key = key
+
+	ck.mu.Lock()
+	defer ck.mu.Unlock()
+	args.UID = ck.uid
+	args.RID = ck.requestId()
+	args.ConfigNum = ck.config.Num
 
 	for {
 		shard := key2shard(key)
@@ -84,9 +105,8 @@ func (ck *Clerk) Get(key string) string {
 		time.Sleep(100 * time.Millisecond)
 		// ask controler for the latest configuration.
 		ck.config = ck.sm.Query(-1)
+		args.ConfigNum = ck.config.Num
 	}
-
-	return ""
 }
 
 // shared by Put and Append.
@@ -97,6 +117,11 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	args.Value = value
 	args.Op = op
 
+	ck.mu.Lock()
+	defer ck.mu.Unlock()
+	args.UID = ck.uid
+	args.RID = ck.requestId()
+	args.ConfigNum = ck.config.Num
 
 	for {
 		shard := key2shard(key)
@@ -118,6 +143,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		time.Sleep(100 * time.Millisecond)
 		// ask controler for the latest configuration.
 		ck.config = ck.sm.Query(-1)
+		args.ConfigNum = ck.config.Num
 	}
 }
 
