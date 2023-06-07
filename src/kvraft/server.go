@@ -21,8 +21,6 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-type Status string
-
 // Op is the `Command` struct in Raft that `KVServer` sends to Raft for consensus,
 // and Raft sends back for commit/apply after consensus is reached.
 type Op struct {
@@ -92,23 +90,18 @@ type KVServer struct {
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
-	reply.Err = kv.sendOpToRaft(OpFromGetArgs(args))
-	if reply.Err == OK {
-		kv.mu.Lock()
-		defer kv.mu.Unlock()
-		reply.Value = kv.uid2val[args.UID]
-		if reply.Value == "" {
-			reply.Err = ErrNoKey
-		}
+	reply.Value, reply.Err = kv.sendOpToRaft(OpFromGetArgs(args))
+	if reply.Err == OK && reply.Value == "" {
+		reply.Err = ErrNoKey
 	}
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
-	reply.Err = kv.sendOpToRaft(OpFromPutAppendArgs(args))
+	_, reply.Err = kv.sendOpToRaft(OpFromPutAppendArgs(args))
 }
 
-func (kv *KVServer) sendOpToRaft(op Op) Err {
+func (kv *KVServer) sendOpToRaft(op Op) (string, Err) {
 	kv.mu.Lock()
 	if _, ok := kv.uid2rid[op.UID]; !ok {
 		kv.uid2rid[op.UID] = 0
@@ -118,10 +111,11 @@ func (kv *KVServer) sendOpToRaft(op Op) Err {
 	case op.RID < rid:
 		kv.mu.Unlock()
 		DPrintf("[PANIC][sendOpToRaft] %d, too small RID from UID %d. expected: >= %d, actual: %d", kv.me, op.UID, rid, op.RID)
-		return ErrWrongLeader
+		return "", ErrWrongLeader
 	case op.RID == rid:
+		val := kv.uid2val[op.UID]
 		kv.mu.Unlock()
-		return OK
+		return val, OK
 	case op.RID > rid:
 		// new op, proceed below
 		kv.mu.Unlock()
@@ -129,12 +123,12 @@ func (kv *KVServer) sendOpToRaft(op Op) Err {
 
 	index, _, isLeader := kv.rf.Start(op)
 	if !isLeader {
-		return ErrWrongLeader
+		return "", ErrWrongLeader
 	}
 	return kv.waitOpToFinish(index, op.UID, op.RID)
 }
 
-func (kv *KVServer) waitOpToFinish(index int, uid, rid int64) Err {
+func (kv *KVServer) waitOpToFinish(index int, uid, rid int64) (string, Err) {
 	i := 0
 	for !kv.killed() && i < 70 {
 		i++
@@ -142,28 +136,31 @@ func (kv *KVServer) waitOpToFinish(index int, uid, rid int64) Err {
 		kv.mu.Lock()
 		switch {
 		case kv.uid2rid[uid] == rid:
+			val := kv.uid2val[uid]
 			kv.mu.Unlock()
-			return OK
+			return val, OK
 		case kv.uid2rid[uid] > rid:
 			kv.mu.Unlock()
-			return ErrWrongLeader
+			return "", ErrWrongLeader
 		}
 
 		if committedUid, ok := kv.index2uid[index]; ok {
 			var err Err
+			var val string
 			if committedUid == uid && kv.uid2rid[uid] == rid {
+				val = kv.uid2val[uid]
 				err = OK
 			} else {
 				err = ErrWrongLeader
 			}
 			kv.mu.Unlock()
-			return err
+			return val, err
 		}
 
 		kv.mu.Unlock()
 		time.Sleep(10 * time.Millisecond)
 	}
-	return ErrWrongLeader
+	return "", ErrWrongLeader
 }
 
 // the tester calls Kill() when a KVServer instance won't
